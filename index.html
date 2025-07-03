@@ -757,7 +757,9 @@
     };
     
     const renderCardList = () => {
-        cardListEl.innerHTML = '';
+        console.log("--- DEBUG: renderCardList called ---");
+        console.log("Current state.creditCards:", state.creditCards);
+        cardListEl.innerHTML = ''; // Clear the list before rendering
         if (state.creditCards.length === 0) {
             cardListEl.innerHTML = `<p class="text-slate-500 text-center">Nenhum cartão cadastrado.</p>`;
             return;
@@ -965,9 +967,11 @@
         futureInstallmentsChart.data.datasets[0].data = sortedMonthLabels.map(label => futureInstallments[label]);
         futureInstallmentsChart.update();
 
-        // Populate textual list
+        // Populate textual list - Changed condition here
         let textListHtml = '';
-        if (sortedMonthLabels.every(month => futureInstallments[month] === 0)) {
+        const hasFutureInstallments = Object.values(futureInstallments).some(total => total > 0);
+
+        if (!hasFutureInstallments) { 
             futureInvoicesTextListEl.innerHTML = '<p>Nenhuma fatura ou parcela futura para este cartão.</p>';
         } else {
             sortedMonthLabels.forEach(monthLabel => {
@@ -1217,8 +1221,20 @@
         }
     });
 
+    // --- Variáveis para armazenar as funções de unsubscribe dos listeners ---
+    let unsubscribeIncomes = null;
+    let unsubscribeExpenses = null;
+    let unsubscribeCreditCards = null;
+    let unsubscribeUserSettings = null;
+
     // --- Carregamento de Dados do Firestore ---
     const loadUserData = () => {
+        // Desinscreve os listeners existentes para evitar duplicações
+        if (unsubscribeIncomes) unsubscribeIncomes();
+        if (unsubscribeExpenses) unsubscribeExpenses();
+        if (unsubscribeCreditCards) unsubscribeCreditCards();
+        if (unsubscribeUserSettings) unsubscribeUserSettings();
+
         let loadedCount = 0;
         const totalToLoad = 4; 
 
@@ -1231,19 +1247,19 @@
             }
         };
 
-        window.setupRealtimeListener('incomes', (data) => {
+        unsubscribeIncomes = window.setupRealtimeListener('incomes', (data) => {
             state.incomes = data;
             if (!state.isDataLoaded) checkAllLoaded();
             else fullUpdate();
         });
 
-        window.setupRealtimeListener('expenses', (data) => {
+        unsubscribeExpenses = window.setupRealtimeListener('expenses', (data) => {
             state.expenses = data;
             if (!state.isDataLoaded) checkAllLoaded();
             else fullUpdate();
         });
 
-        window.setupRealtimeListener('creditCards', (data) => {
+        unsubscribeCreditCards = window.setupRealtimeListener('creditCards', (data) => {
             state.creditCards = data;
             if (!state.isDataLoaded) checkAllLoaded();
             else {
@@ -1258,7 +1274,7 @@
             }
         });
 
-        window.setupDocumentListener('appState', 'userSettings', (data) => {
+        unsubscribeUserSettings = window.setupDocumentListener('appState', 'userSettings', (data) => {
             if (data) {
                 state.emergencyReserve = data.emergencyReserve || 0;
                 state.userName = data.userName || ''; 
