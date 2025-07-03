@@ -25,7 +25,7 @@
         let currentAppId = 'default-app-id'; // ID do aplicativo a ser usado no Firestore
 
         // Expose Firebase functions to global scope for use in inline scripts
-        window.initializeAppFirebase = (config) => {
+        window.initializeAppFirebase = async (config) => { // Torna a função assíncrona
             window.firebaseConfig = config; // Armazena a configuração
             window.firebaseApp = initializeApp(window.firebaseConfig);
             window.db = getFirestore(window.firebaseApp);
@@ -34,40 +34,52 @@
             // Define o ID do aplicativo para uso no Firestore, priorizando __app_id do ambiente Canvas
             currentAppId = typeof __app_id !== 'undefined' ? __app_id : window.firebaseConfig.projectId;
 
-            onAuthStateChanged(window.auth, async (user) => {
-                if (user) {
-                    window.userId = user.uid;
-                    console.log("Authenticated with user ID:", window.userId);
-                    // Agora que temos um usuário, carregamos os dados
-                    loadUserData();
-                } else {
-                    console.log("No user signed in. Attempting authentication...");
-                    // Log para depuração: verificar o valor de __initial_auth_token
-                    console.log("Value of __initial_auth_token:", typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : "undefined/null");
-                    console.log("Type of __initial_auth_token:", typeof __initial_auth_token);
+            // Lógica de autenticação: tenta custom token primeiro se disponível e válido, senão anônimo
+            try {
+                const initialAuthTokenExists = typeof __initial_auth_token === 'string' && __initial_auth_token.length > 0;
 
+                if (initialAuthTokenExists) {
+                    console.log("Tentando login com token personalizado (do ambiente Canvas)...");
                     try {
-                        // Usa __initial_auth_token se disponível (ambiente Canvas), caso contrário, autentica anonimamente
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(window.auth, __initial_auth_token);
-                            console.log("Signed in with custom token.");
-                        } else {
-                            await signInAnonymously(window.auth);
-                            console.log("Signed in anonymously.");
-                        }
+                        await signInWithCustomToken(window.auth, __initial_auth_token);
+                        console.log("Login com token personalizado realizado com sucesso.");
                     } catch (error) {
-                        console.error("Firebase authentication error:", error);
-                        // Se o erro for de token personalizado inválido, tenta login anônimo como fallback
+                        console.error("Erro na autenticação com token personalizado:", error);
+                        // Se o erro for custom-token-mismatch, tenta login anônimo como fallback
                         if (error.code === 'auth/custom-token-mismatch' || error.code === 'auth/invalid-custom-token') {
-                            console.warn("Custom token failed. Attempting anonymous sign-in as fallback.");
-                            try {
-                                await signInAnonymously(window.auth);
-                                console.log("Signed in anonymously after custom token failure.");
-                            } catch (anonError) {
-                                console.error("Anonymous sign-in fallback also failed:", anonError);
-                            }
+                            console.warn("Token personalizado inválido. Tentando login anônimo como fallback.");
+                            await signInAnonymously(window.auth);
+                            console.log("Login anônimo realizado após falha do token personalizado.");
+                        } else {
+                            // Outros erros de custom token, ainda tenta anônimo
+                            console.warn("Outro erro de token personalizado. Tentando login anônimo como fallback.");
+                            await signInAnonymously(window.auth);
+                            console.log("Login anônimo realizado após outro erro de token personalizado.");
                         }
                     }
+                } else {
+                    console.log("Nenhum token personalizado válido encontrado. Tentando login anônimo diretamente.");
+                    await signInAnonymously(window.auth);
+                    console.log("Login anônimo realizado com sucesso.");
+                }
+            } catch (error) {
+                // Captura qualquer erro que possa ocorrer durante as tentativas de signInAnonymously
+                console.error("Erro final na tentativa de autenticação:", error);
+            }
+
+            // onAuthStateChanged irá reagir ao resultado final da autenticação
+            onAuthStateChanged(window.auth, (user) => {
+                if (user) {
+                    window.userId = user.uid;
+                    console.log("Estado do usuário alterado: Autenticado com ID de usuário:", window.userId);
+                    loadUserData();
+                } else {
+                    window.userId = null;
+                    console.log("Estado do usuário alterado: Nenhum usuário logado.");
+                    // Se nenhum usuário após as tentativas iniciais, garante que a sobreposição de carregamento esteja oculta
+                    loadingOverlay.classList.add('hidden');
+                    state.isDataLoaded = true;
+                    fullUpdate(); // Atualiza a UI mesmo sem dados se não houver usuário
                 }
             });
         };
@@ -1264,8 +1276,8 @@
             projectId: "radar-financeiro-42e2f",
             storageBucket: "radar-financeiro-42e2f.firebasestorage.app",
             messagingSenderId: "610462054688",
-            appId: "1:610462054688:web:a4bc3dbe08c1b853ffbf45"
-            // measurementId: "G-R0HSK82FSH" // measurementId não é necessário para esta aplicação
+            appId: "1:610462054688:web:a4bc3dbe08c1b853ffbf45",
+            measurementId: "G-R0HSK82FSH" // Adicionado o measurementId aqui
         };
         
         // Verifica se as configurações foram preenchidas corretamente (não são os placeholders)
@@ -1287,4 +1299,3 @@
 
 </body>
 </html>
-
