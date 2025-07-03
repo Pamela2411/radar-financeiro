@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-g">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radar Financeiro Inteligente</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, query, onSnapshot, addDoc, setDoc, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase variables (will be initialized in initializeApp)
+        window.firebaseApp = null;
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+
+        // Expose Firebase functions to global scope for use in inline scripts
+        window.initializeAppFirebase = (firebaseConfig) => {
+            window.firebaseApp = initializeApp(firebaseConfig);
+            window.db = getFirestore(window.firebaseApp);
+            window.auth = getAuth(window.firebaseApp);
+
+            onAuthStateChanged(window.auth, async (user) => {
+                if (user) {
+                    window.userId = user.uid;
+                    console.log("Authenticated with user ID:", window.userId);
+                    // Now that we have a user, load data
+                    loadUserData();
+                } else {
+                    console.log("No user signed in. Attempting anonymous sign-in...");
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(window.auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(window.auth);
+                        }
+                    } catch (error) {
+                        console.error("Firebase authentication error:", error);
+                    }
+                }
+            });
+        };
+
+        // Firestore operations exposed to global scope
+        window.addDocument = async (collectionName, data) => {
+            if (!window.userId) { console.error("User not authenticated."); return; }
+            try {
+                const colRef = collection(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`);
+                const docRef = await addDoc(colRef, data);
+                return docRef.id;
+            } catch (e) {
+                console.error("Error adding document: ", e);
+            }
+        };
+
+        window.setDocument = async (collectionName, docId, data) => {
+            if (!window.userId) { console.error("User not authenticated."); return; }
+            try {
+                const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                await setDoc(docRef, data, { merge: true });
+            } catch (e) {
+                console.error("Error setting document: ", e);
+            }
+        };
+
+        window.deleteDocument = async (collectionName, docId) => {
+            if (!window.userId) { console.error("User not authenticated."); return; }
+            try {
+                const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                await deleteDoc(docRef);
+            } catch (e) {
+                console.error("Error deleting document: ", e);
+            }
+        };
+
+        window.setupRealtimeListener = (collectionName, callback) => {
+            if (!window.userId) { 
+                // This might be called before userId is available, so we defer setup
+                const unsubscribe = onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        const q = query(collection(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`));
+                        onSnapshot(q, (snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            callback(data);
+                        });
+                        unsubscribe(); // Unsubscribe from auth changes once user is found
+                    }
+                });
+                return () => {}; // Return a dummy unsubscribe for now
+            } else {
+                const q = query(collection(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`));
+                return onSnapshot(q, (snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    callback(data);
+                });
+            }
+        };
+
+        window.setupDocumentListener = (collectionName, docId, callback) => {
+            if (!window.userId) {
+                const unsubscribe = onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                        onSnapshot(docRef, (docSnap) => {
+                            if (docSnap.exists()) {
+                                callback({ id: docSnap.id, ...docSnap.data() });
+                            } else {
+                                callback(null);
+                            }
+                        });
+                        unsubscribe();
+                    }
+                });
+                return () => {};
+            } else {
+                const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                return onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        callback({ id: docSnap.id, ...docSnap.data() });
+                    } else {
+                        callback(null);
+                    }
+                });
+            }
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* slate-50 */
+            color: #2d3748; /* Texto escuro */
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px;
+            }
+        }
+        .animate-pulse-once {
+            animation: pulse 1s cubic-bezier(0.4, 0, 0.6, 1);
+        }
+        .number-glow-green {
+            text-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+        }
+        .number-glow-red {
+            text-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+        }
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            font-size: 1.5rem;
+            color: #0d9488;
+            flex-direction: column;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #0d9488;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="antialiased">
+
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner"></div>
+        Carregando dados...
+    </div>
+
+    <!-- Modal de Renda -->
+    <div id="income-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 md:w-1/3">
+            <h2 class="text-xl font-bold text-slate-800 mb-4">Adicionar Renda</h2>
+            <form id="income-form">
+                <div class="mb-4">
+                    <label for="income-description" class="block text-sm font-medium text-slate-600 mb-1">Descrição</label>
+                    <input type="text" id="income-description" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="Ex: Salário, Freela" required>
+                </div>
+                <div class="mb-4">
+                    <label for="income-amount" class="block text-sm font-medium text-slate-600 mb-1">Valor</label>
+                    <input type="number" id="income-amount" step="0.01" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="1000.00" required>
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="toggleIncomeModal()" class="px-4 py-2 bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700">Adicionar</button>
+                </div>
+            </form>
+
+            <div class="mt-6 border-t pt-4">
+                <h3 class="text-lg font-bold text-slate-800 mb-3">Rendas Lançadas</h3>
+                <div id="income-list" class="space-y-2 max-h-48 overflow-y-auto pr-2">
+                    <!-- Rendas serão listadas aqui via JS -->
+                    <p class="text-slate-500 text-center">Nenhuma renda lançada ainda.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Reserva de Emergência -->
+    <div id="reserve-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 md:w-1/3">
+            <h2 class="text-xl font-bold text-slate-800 mb-4">Atualizar Reserva de Emergência</h2>
+            <form id="reserve-form">
+                <div class="mb-4">
+                    <label for="emergency-reserve-input" class="block text-sm font-medium text-slate-600 mb-1">Valor Atual da Reserva</label>
+                    <input type="number" id="emergency-reserve-input" step="0.01" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="5000.00">
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="toggleReserveModal()" class="px-4 py-2 bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700">Salvar Reserva</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Gerenciar Cartões -->
+    <div id="manage-cards-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 md:w-1/2 lg:w-1/3">
+            <h2 class="text-xl font-bold text-slate-800 mb-4">Gerenciar Cartões de Crédito</h2>
+            <form id="add-card-form" class="mb-6 border-b pb-4">
+                <h3 class="text-lg font-semibold text-slate-700 mb-3">Adicionar Novo Cartão</h3>
+                <div class="mb-3">
+                    <label for="new-card-name" class="block text-sm font-medium text-slate-600 mb-1">Nome do Cartão</label>
+                    <input type="text" id="new-card-name" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="Ex: Nubank, Inter" required>
+                </div>
+                <div class="mb-4">
+                    <label for="new-card-limit" class="block text-sm font-medium text-slate-600 mb-1">Limite Total</label>
+                    <input type="number" id="new-card-limit" step="0.01" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="5000.00" required>
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700">Adicionar Cartão</button>
+                </div>
+            </form>
+
+            <h3 class="text-lg font-bold text-slate-800 mb-3">Meus Cartões</h3>
+            <div id="card-list" class="space-y-2 max-h-48 overflow-y-auto pr-2">
+                <!-- Cartões serão listados aqui via JS -->
+                <p class="text-slate-500 text-center">Nenhum cartão cadastrado.</p>
+            </div>
+            <div class="flex justify-end mt-4">
+                <button type="button" onclick="toggleManageCardsModal()" class="px-4 py-2 bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Perfil do Usuário -->
+    <div id="user-profile-modal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 md:w-1/3">
+            <h2 class="text-xl font-bold text-slate-800 mb-4">Meu Perfil</h2>
+            <form id="user-profile-form">
+                <div class="mb-4">
+                    <label for="user-name-input" class="block text-sm font-medium text-slate-600 mb-1">Seu Nome</label>
+                    <input type="text" id="user-name-input" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="Seu nome">
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="toggleUserProfileModal()" class="px-4 py-2 bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700">Salvar Nome</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <div class="container mx-auto p-4 md:p-8">
+        <!-- Cabeçalho -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-teal-600">Radar Financeiro Inteligente</h1>
+            <p class="text-slate-500 mt-2">Seu companheiro diário para clareza e controle financeiro.</p>
+            <div class="mt-4 text-xl font-semibold text-slate-700">
+                <span id="user-greeting">Olá!</span>
+                <button onclick="toggleUserProfileModal()" class="text-blue-500 hover:text-blue-700 text-sm font-semibold ml-2">
+                    ✏️
+                </button>
+            </div>
+        </header>
+
+        <!-- Dashboard Principal de Métricas -->
+        <section class="grid grid-cols-2 md:grid-cols-5 gap-4 md:gap-6 mb-8">
+            <div class="bg-white p-4 rounded-xl shadow-md text-center">
+                <h3 class="text-sm font-medium text-slate-500">Renda Mensal</h3>
+                <p id="total-income" class="text-2xl font-bold text-green-600 mt-1">R$ 0,00</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-md text-center">
+                <h3 class="text-sm font-medium text-slate-500">Gastos no Mês</h3>
+                <p id="total-expenses" class="text-2xl font-bold text-red-600 mt-1">R$ 0,00</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-md text-center">
+                <h3 class="text-sm font-medium text-slate-500">Saldo Atual</h3>
+                <p id="current-balance" class="text-2xl font-bold text-slate-800 mt-1">R$ 0,00</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-md text-center">
+                <h3 class="text-sm font-medium text-slate-500">Fatura Atual Cartão</h3>
+                <p id="current-invoice-dashboard" class="text-2xl font-bold text-orange-500 mt-1">R$ 0,00</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-md text-center">
+                <h3 class="text-sm font-medium text-slate-500">Reserva de Emergência</h3>
+                <div class="flex items-center justify-center mt-1">
+                    <p id="emergency-reserve-display" class="text-2xl font-bold text-blue-600 mr-2">R$ 0,00</p>
+                    <button onclick="toggleReserveModal()" class="text-blue-500 hover:text-blue-700 text-sm font-semibold">
+                        <!-- Unicode Edit Icon -->
+                        ✏️
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Corpo Principal da Aplicação -->
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Coluna Esquerda: Lançamentos -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- Formulário de Lançamento de Gasto -->
+                <div class="bg-white p-6 rounded-xl shadow-md">
+                    <h2 class="text-xl font-bold text-slate-800 mb-4">Adicionar Transação</h2>
+                    <div class="flex mb-4 border-b">
+                        <button id="tab-expense" class="flex-1 py-2 text-center font-semibold text-teal-600 border-b-2 border-teal-600">Gasto</button>
+                        <button id="tab-income" class="flex-1 py-2 text-center font-semibold text-slate-500">Renda</button>
+                    </div>
+
+                    <form id="expense-form">
+                        <div class="mb-3">
+                            <label for="expense-description" class="block text-sm font-medium text-slate-600 mb-1">Descrição</label>
+                            <input type="text" id="expense-description" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="Ex: Almoço, Netflix" required>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3 mb-3">
+                            <div>
+                                <label for="expense-amount" class="block text-sm font-medium text-slate-600 mb-1">Valor</label>
+                                <input type="number" id="expense-amount" step="0.01" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" placeholder="50.00" required>
+                            </div>
+                            <div>
+                                 <label for="expense-date" class="block text-sm font-medium text-slate-600 mb-1">Data</label>
+                                <input type="date" id="expense-date" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" required>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="expense-category" class="block text-sm font-medium text-slate-600 mb-1">Categoria</label>
+                            <select id="expense-category" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" required>
+                                <option>Alimentação (Fora/Delivery)</option>
+                                <option>Alimentação (Mercado)</option>
+                                <option>Moradia</option>
+                                <option>Transporte</option>
+                                <option>Contas Fixas</option>
+                                <option>Lazer/Festas/Bares</option>
+                                <option>Estética/Cuidados Pessoais</option>
+                                <option>Compras (Roupas, etc)</option>
+                                <option>Saúde</option>
+                                <option>Educação</option>
+                                <option>Outros</option>
+                            </select>
+                        </div>
+                        <div class="mb-4">
+                            <label for="payment-method" class="block text-sm font-medium text-slate-600 mb-1">Forma de Pagamento</label>
+                            <select id="payment-method" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500" required>
+                                <option>Débito</option>
+                                <option>Dinheiro</option>
+                                <option>Cartão de Crédito</option>
+                                <option>PIX</option>
+                                <option>Boleto</option>
+                            </select>
+                        </div>
+                        <div id="installments-container" class="hidden mb-4">
+                            <label for="expense-credit-card-selector" class="block text-sm font-medium text-slate-600 mb-1">Cartão de Crédito</label>
+                            <select id="expense-credit-card-selector" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 mb-3" required>
+                                <!-- Options populated by JS -->
+                            </select>
+
+                            <label for="installments-count" class="block text-sm font-medium text-slate-600 mb-1">Parcelas (1 para à vista)</label>
+                            <input type="number" id="installments-count" min="1" value="1" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500">
+                        </div>
+                        <button type="submit" class="w-full px-4 py-3 bg-teal-600 text-white font-bold rounded-lg hover:bg-teal-700 transition-colors">Adicionar Gasto</button>
+                    </form>
+                </div>
+                
+                <!-- Lista de Gastos Recentes -->
+                <div class="bg-white p-6 rounded-xl shadow-md">
+                    <h2 class="text-xl font-bold text-slate-800 mb-4">Gastos Recentes</h2>
+                    <div id="recent-expenses-list" class="space-y-3 max-h-80 overflow-y-auto pr-2">
+                        <!-- Itens serão adicionados aqui via JS -->
+                        <p class="text-slate-500 text-center">Nenhum gasto lançado ainda.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Coluna Direita: Visualizações e Insights -->
+            <div class="lg:col-span-2 space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Gastos por Categoria -->
+                    <div class="bg-white p-6 rounded-xl shadow-md">
+                        <h2 class="text-xl font-bold text-slate-800 mb-4">Gastos por Categoria</h2>
+                        <div class="chart-container">
+                            <canvas id="category-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Evolução do Saldo -->
+                    <div class="bg-white p-6 rounded-xl shadow-md">
+                        <h2 class="text-xl font-bold text-slate-800 mb-4">Evolução do Saldo</h2>
+                        <div class="chart-container">
+                            <canvas id="balance-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
+                    <!-- Dashboard do Cartão de Crédito -->
+                    <div class="md:col-span-3 bg-white p-6 rounded-xl shadow-md">
+                        <h2 class="text-xl font-bold text-slate-800 mb-4">Dashboard do Cartão de Crédito</h2>
+                        <div class="mb-4">
+                            <label for="dashboard-credit-card-selector" class="block text-sm font-medium text-slate-600 mb-1">Ver Cartão:</label>
+                            <select id="dashboard-credit-card-selector" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500">
+                                <!-- Options populated by JS -->
+                            </select>
+                        </div>
+                        <div class="flex items-center space-x-4 mb-4">
+                            <div id="credit-card-semaphore" class="w-8 h-8 rounded-full bg-slate-300" title="Saúde do Cartão"></div>
+                            <div>
+                                <p class="text-sm text-slate-500">Fatura Atual (Estimativa)</p>
+                                <p id="current-invoice" class="text-2xl font-bold">R$ 0,00</p>
+                            </div>
+                            <div class="ml-auto">
+                                <p class="text-sm text-slate-500">Limite Disponível</p>
+                                <p id="available-limit" class="text-2xl font-bold text-blue-600">R$ 0,00</p>
+                            </div>
+                        </div>
+                        <div class="mb-4">
+                            <h3 class="text-md font-semibold text-slate-700 mb-2">Comprometimento Futuro:</h3>
+                            <div class="chart-container" style="height: 220px;">
+                                <canvas id="future-installments-chart"></canvas>
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <h3 class="text-md font-semibold text-slate-700 mb-2">Próximas Faturas Detalhadas:</h3>
+                            <div id="future-invoices-text-list" class="space-y-1 text-sm text-slate-600">
+                                <p>Nenhuma parcela futura.</p>
+                            </div>
+                        </div>
+                        <button onclick="toggleManageCardsModal()" class="mt-4 px-4 py-2 bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300 text-sm">Gerenciar Cartões</button>
+                    </div>
+                    
+                    <!-- Mensagens Emocionais -->
+                    <div class="md:col-span-2 bg-gradient-to-br from-teal-600 to-teal-800 p-6 rounded-xl shadow-md text-white flex flex-col justify-center">
+                        <h2 class="text-xl font-bold mb-3">Seu Radar diz:</h2>
+                        <div id="emotional-message" class="text-teal-50 space-y-2">
+                           <p>Adicione suas rendas e gastos para receber insights personalizados!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+<script>
+    // --- Estado da Aplicação ---
+    let state = {
+        incomes: [],
+        expenses: [],
+        categories: [
+            'Alimentação (Fora/Delivery)', 'Alimentação (Mercado)', 'Moradia', 
+            'Transporte', 'Contas Fixas', 'Lazer/Festas/Bares', 'Estética/Cuidados Pessoais', 
+            'Compras (Roupas, etc)', 'Saúde', 'Educação', 'Outros'
+        ],
+        currentMonth: new Date().getMonth(),
+        currentYear: new Date().getFullYear(),
+        creditCards: [], 
+        selectedCreditCardId: null, 
+        emergencyReserve: 0, 
+        userName: '', // Novo campo para o nome do usuário
+        isDataLoaded: false // Flag para controlar o carregamento inicial dos dados
+    };
+
+    // --- Elementos do DOM ---
+    const totalIncomeEl = document.getElementById('total-income');
+    const totalExpensesEl = document.getElementById('total-expenses');
+    const currentBalanceEl = document.getElementById('current-balance');
+    const currentInvoiceDashboardEl = document.getElementById('current-invoice-dashboard'); 
+    const emergencyReserveDisplayEl = document.getElementById('emergency-reserve-display'); 
+    const recentExpensesListEl = document.getElementById('recent-expenses-list');
+    const expenseForm = document.getElementById('expense-form');
+    const incomeForm = document.getElementById('income-form');
+    const paymentMethodEl = document.getElementById('payment-method');
+    const installmentsContainer = document.getElementById('installments-container');
+    const expenseDateEl = document.getElementById('expense-date');
+    const incomeModal = document.getElementById('income-modal');
+    const emotionalMessageEl = document.getElementById('emotional-message');
+    const creditCardSemaphoreEl = document.getElementById('credit-card-semaphore');
+    const currentInvoiceEl = document.getElementById('current-invoice');
+    const incomeListEl = document.getElementById('income-list'); 
+    const emergencyReserveInput = document.getElementById('emergency-reserve-input'); 
+    const reserveModal = document.getElementById('reserve-modal'); 
+    const reserveForm = document.getElementById('reserve-form'); 
+    const manageCardsModal = document.getElementById('manage-cards-modal'); 
+    const addCardForm = document.getElementById('add-card-form'); 
+    const cardListEl = document.getElementById('card-list'); 
+    const expenseCreditCardSelector = document.getElementById('expense-credit-card-selector'); 
+    const dashboardCreditCardSelector = document.getElementById('dashboard-credit-card-selector'); 
+    const availableLimitEl = document.getElementById('available-limit'); 
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const userGreetingEl = document.getElementById('user-greeting'); // Novo elemento
+    const userProfileModal = document.getElementById('user-profile-modal'); // Novo modal
+    const userNameInput = document.getElementById('user-name-input'); // Novo input
+    const userProfileForm = document.getElementById('user-profile-form'); // Novo formulário
+
+
+    // --- Funções de Formatação ---
+    const formatCurrency = (value) => `R$ ${value.toFixed(2).replace('.', ',')}`;
+
+    // --- Lógica de Gráficos (Chart.js) ---
+    let categoryChart, balanceChart, futureInstallmentsChart;
+
+    const initializeCharts = () => {
+        const categoryCtx = document.getElementById('category-chart').getContext('2d');
+        categoryChart = new Chart(categoryCtx, {
+            type: 'doughnut',
+            data: { labels: [], datasets: [{ data: [], backgroundColor: ['#14b8a6', '#f97316', '#3b82f6', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#64748b'] }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
+        });
+
+        const balanceCtx = document.getElementById('balance-chart').getContext('2d');
+        balanceChart = new Chart(balanceCtx, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'Saldo', data: [], borderColor: '#0d9488', backgroundColor: 'rgba(20, 184, 166, 0.1)', fill: true, tension: 0.4, pointRadius: 5, pointBackgroundColor: '#0d9488', borderWidth: 3, pointHoverRadius: 8, pointHitRadius: 10 }] }, 
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false, 
+                scales: { 
+                    y: { 
+                        beginAtZero: false,
+                        grid: {
+                            drawOnChartArea: true 
+                        }
+                    },
+                    x: {
+                        grid: {
+                            drawOnChartArea: false 
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            title: function(context) {
+                                return `Dia ${context[0].label}`;
+                            },
+                            label: function(context) {
+                                return `Saldo: ${formatCurrency(context.parsed.y)}`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+        const futureInstallmentsCtx = document.getElementById('future-installments-chart').getContext('2d');
+        futureInstallmentsChart = new Chart(futureInstallmentsCtx, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ data: [], backgroundColor: '#f97316' }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: 'Comprometimento Futuro do Cartão' } } }
+        });
+    };
+    
+    // --- Funções de Atualização da UI ---
+    const updateDashboard = () => {
+        const totalIncome = state.incomes.reduce((sum, income) => sum + income.amount, 0);
+        const totalExpenses = state.expenses
+            .filter(e => new Date(e.date).getMonth() === state.currentMonth && new Date(e.date).getFullYear() === state.currentYear)
+            .reduce((sum, expense) => sum + expense.amount, 0);
+        const balance = totalIncome - totalExpenses;
+
+        totalIncomeEl.textContent = formatCurrency(totalIncome);
+        totalExpensesEl.textContent = formatCurrency(totalExpenses); 
+        currentBalanceEl.textContent = formatCurrency(balance);
+        emergencyReserveDisplayEl.textContent = formatCurrency(state.emergencyReserve); 
+
+        if(balance > 0) {
+            currentBalanceEl.classList.remove('text-red-600', 'number-glow-red');
+            currentBalanceEl.classList.add('text-green-600'); 
+        } else {
+            currentBalanceEl.classList.remove('text-green-600');
+            currentBalanceEl.classList.add('text-red-600', 'number-glow-red');
+        }
+
+        const currentInvoiceAmount = state.expenses
+            .filter(e => e.paymentMethod === 'Cartão de Crédito' && e.cardId === state.selectedCreditCardId && new Date(e.date).getMonth() === state.currentMonth && new Date(e.date).getFullYear() === state.currentYear)
+            .reduce((sum, e) => sum + e.amount, 0);
+        currentInvoiceDashboardEl.textContent = formatCurrency(currentInvoiceAmount);
+
+        const selectedCard = state.creditCards.find(card => card.id === state.selectedCreditCardId);
+        const cardLimit = selectedCard ? selectedCard.limit : 0;
+        const availableLimit = cardLimit - currentInvoiceAmount;
+        availableLimitEl.textContent = formatCurrency(availableLimit);
+        availableLimitEl.classList.remove('text-blue-600', 'text-red-600');
+        availableLimitEl.classList.add(availableLimit >= 0 ? 'text-blue-600' : 'text-red-600');
+
+        // Atualiza a saudação do usuário
+        userGreetingEl.textContent = state.userName ? `Olá, ${state.userName}!` : 'Olá!';
+    };
+    
+    const renderRecentExpenses = () => {
+        recentExpensesListEl.innerHTML = '';
+        const monthExpenses = state.expenses
+            .filter(e => new Date(e.date).getMonth() === state.currentMonth && new Date(e.date).getFullYear() === state.currentYear)
+            .sort((a,b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 10);
+
+        if (monthExpenses.length === 0) {
+            recentExpensesListEl.innerHTML = `<p class="text-slate-500 text-center">Nenhum gasto lançado este mês.</p>`;
+            return;
+        }
+
+        monthExpenses.forEach(expense => {
+            const el = document.createElement('div');
+            el.className = 'flex justify-between items-center p-2 rounded-lg bg-slate-50';
+            el.innerHTML = `
+                <div>
+                    <p class="font-semibold text-slate-700">${expense.description}</p>
+                    <p class="text-xs text-slate-500">${new Date(expense.date).toLocaleDateString('pt-BR')} - ${expense.category}</p>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <p class="font-bold text-red-500">${formatCurrency(expense.amount)}</p>
+                    <button onclick="deleteExpense('${expense.id}')" class="text-slate-400 hover:text-red-600 transition-colors">
+                        🗑️
+                    </button>
+                </div>
+            `;
+            recentExpensesListEl.appendChild(el);
+        });
+    };
+
+    const deleteExpense = async (idToDelete) => {
+        const numericId = idToDelete; 
+        
+        const expenseToDelete = state.expenses.find(e => e.id === numericId);
+
+        if (!expenseToDelete) return; 
+
+        try {
+            if (expenseToDelete.transactionId) {
+                const expensesToDelete = state.expenses.filter(e => e.transactionId === expenseToDelete.transactionId);
+                for (const exp of expensesToDelete) {
+                    await window.deleteDocument('expenses', exp.id);
+                }
+            } else {
+                await window.deleteDocument('expenses', numericId);
+            }
+        } catch (error) {
+            console.error("Error deleting expense: ", error);
+        }
+    };
+
+    const renderIncomesList = () => {
+        incomeListEl.innerHTML = '';
+        if (state.incomes.length === 0) {
+            incomeListEl.innerHTML = `<p class="text-slate-500 text-center">Nenhuma renda lançada ainda.</p>`;
+            return;
+        }
+        state.incomes.forEach(income => {
+            const el = document.createElement('div');
+            el.className = 'flex justify-between items-center p-2 rounded-lg bg-slate-50';
+            el.innerHTML = `
+                <div>
+                    <p class="font-semibold text-slate-700">${income.description}</p>
+                    <p class="text-xs text-slate-500">Renda Mensal</p>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <p class="font-bold text-green-500">${formatCurrency(income.amount)}</p>
+                    <button onclick="deleteIncome('${income.id}')" class="text-slate-400 hover:text-red-600 transition-colors">
+                        🗑️
+                    </button>
+                </div>
+            `;
+            incomeListEl.appendChild(el);
+        });
+    };
+
+    const deleteIncome = async (idToDelete) => {
+        try {
+            await window.deleteDocument('incomes', idToDelete);
+        } catch (error) {
+            console.error("Error deleting income: ", error);
+        }
+    };
+    
+    const renderCardList = () => {
+        cardListEl.innerHTML = '';
+        if (state.creditCards.length === 0) {
+            cardListEl.innerHTML = `<p class="text-slate-500 text-center">Nenhum cartão cadastrado.</p>`;
+            return;
+        }
+        state.creditCards.forEach(card => {
+            const el = document.createElement('div');
+            el.className = 'flex justify-between items-center p-2 rounded-lg bg-slate-50';
+            el.innerHTML = `
+                <div>
+                    <p class="font-semibold text-slate-700">${card.name}</p>
+                    <p class="text-xs text-slate-500">Limite: ${formatCurrency(card.limit)}</p>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button onclick="deleteCard('${card.id}')" class="text-slate-400 hover:text-red-600 transition-colors">
+                        🗑️
+                    </button>
+                </div>
+            `;
+            cardListEl.appendChild(el);
+        });
+    };
+
+    const deleteCard = async (idToDelete) => {
+        try {
+            await window.deleteDocument('creditCards', idToDelete);
+            const expensesToDelete = state.expenses.filter(expense => expense.paymentMethod === 'Cartão de Crédito' && expense.cardId === idToDelete);
+            for (const exp of expensesToDelete) {
+                await window.deleteDocument('expenses', exp.id);
+            }
+        } catch (error) {
+            console.error("Error deleting card: ", error);
+        }
+    };
+
+    const populateCreditCardSelectors = () => {
+        expenseCreditCardSelector.innerHTML = '';
+        dashboardCreditCardSelector.innerHTML = '';
+
+        if (state.creditCards.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Nenhum cartão cadastrado';
+            expenseCreditCardSelector.appendChild(option);
+            dashboardCreditCardSelector.appendChild(option.cloneNode(true));
+            state.selectedCreditCardId = null;
+            return;
+        }
+
+        state.creditCards.forEach(card => {
+            const option1 = document.createElement('option');
+            option1.value = card.id;
+            option1.textContent = card.name;
+            expenseCreditCardSelector.appendChild(option1);
+
+            const option2 = document.createElement('option');
+            option2.value = card.id;
+            option2.textContent = card.name;
+            dashboardCreditCardSelector.appendChild(option2);
+        });
+
+        if (!state.selectedCreditCardId || !state.creditCards.some(card => card.id === state.selectedCreditCardId)) {
+            state.selectedCreditCardId = state.creditCards.length > 0 ? state.creditCards[0].id : null;
+        }
+        dashboardCreditCardSelector.value = state.selectedCreditCardId;
+    };
+
+
+    const updateCategoryChart = () => {
+        const categoryTotals = {};
+        state.categories.forEach(cat => categoryTotals[cat] = 0);
+        
+        state.expenses
+            .filter(e => new Date(e.date).getMonth() === state.currentMonth && new Date(e.date).getFullYear() === state.currentYear)
+            .forEach(expense => {
+                categoryTotals[expense.category] = (categoryTotals[expense.category] || 0) + expense.amount;
+            });
+            
+        const labels = Object.keys(categoryTotals).filter(cat => categoryTotals[cat] > 0);
+        const data = Object.values(categoryTotals).filter(total => total > 0);
+        
+        categoryChart.data.labels = labels;
+        categoryChart.data.datasets[0].data = data;
+        categoryChart.update();
+    };
+    
+    const updateBalanceChart = () => {
+        const daysInMonth = new Date(state.currentYear, state.currentMonth + 1, 0).getDate();
+        const labels = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+        const data = Array(daysInMonth).fill(0);
+        
+        let cumulativeBalance = state.incomes.reduce((sum, income) => sum + income.amount, 0);
+        
+        const dailyExpenses = Array(daysInMonth).fill(0);
+        state.expenses
+             .filter(e => new Date(e.date).getMonth() === state.currentMonth && new Date(e.date).getFullYear() === state.currentYear)
+             .forEach(expense => {
+                const day = new Date(expense.date).getDate() - 1;
+                if (day >= 0 && day < daysInMonth) { 
+                    dailyExpenses[day] += expense.amount;
+                }
+             });
+
+        for(let i = 0; i < daysInMonth; i++) {
+            cumulativeBalance -= dailyExpenses[i];
+            data[i] = cumulativeBalance;
+        }
+
+        balanceChart.data.labels = labels;
+        balanceChart.data.datasets[0].data = data;
+        balanceChart.update();
+    };
+
+    const updateCreditCardDashboard = () => {
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+        const futureInvoicesTextListEl = document.getElementById('future-invoices-text-list');
+
+        const currentInvoiceAmount = state.expenses
+            .filter(e => e.paymentMethod === 'Cartão de Crédito' && e.cardId === state.selectedCreditCardId && new Date(e.date).getMonth() === currentMonth && new Date(e.date).getFullYear() === currentYear)
+            .reduce((sum, e) => sum + e.amount, 0);
+
+        currentInvoiceEl.textContent = formatCurrency(currentInvoiceAmount);
+
+        // Semaphore logic
+        const totalIncome = state.incomes.reduce((sum, income) => sum + income.amount, 0);
+        creditCardSemaphoreEl.classList.remove('bg-green-500', 'bg-amber-500', 'bg-red-500', 'bg-slate-300');
+        if(totalIncome > 0 && state.selectedCreditCardId) {
+            const ratio = currentInvoiceAmount / totalIncome;
+            if(ratio < 0.15) creditCardSemaphoreEl.classList.add('bg-green-500');
+            else if (ratio < 0.3) creditCardSemaphoreEl.classList.add('bg-amber-500');
+            else creditCardSemaphoreEl.classList.add('bg-red-500');
+        } else {
+             creditCardSemaphoreEl.classList.add('bg-slate-300');
+        }
+
+        // Future installments chart and textual list
+        const futureInstallments = {};
+        const futureInvoicesDetails = {}; 
+
+        // Initialize for 7 months (current + next 6)
+        for(let i=0; i<=6; i++) { 
+            const date = new Date(currentYear, currentMonth + i, 1);
+            const monthLabel = date.toLocaleString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''); 
+            futureInstallments[monthLabel] = 0;
+            futureInvoicesDetails[monthLabel] = [];
+        }
+
+        state.expenses
+            .filter(e => e.paymentMethod === 'Cartão de Crédito' && e.cardId === state.selectedCreditCardId)
+            .forEach(e => {
+                const expenseDate = new Date(e.date); 
+                const expenseMonth = expenseDate.getMonth();
+                const expenseYear = expenseDate.getFullYear();
+
+                const diffMonthsFromCurrent = (expenseYear - currentYear) * 12 + (expenseMonth - currentMonth);
+                
+                if(diffMonthsFromCurrent >= 0 && diffMonthsFromCurrent <= 6) { 
+                    const futureDate = new Date(currentYear, currentMonth + diffMonthsFromCurrent, 1);
+                    const monthLabel = futureDate.toLocaleString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''); 
+                    
+                    if(futureInstallments.hasOwnProperty(monthLabel)) {
+                        futureInstallments[monthLabel] += e.amount;
+                        futureInvoicesDetails[monthLabel].push({
+                            description: e.description,
+                            amount: e.amount,
+                            isInstallment: e.installments && e.installments.total > 1
+                        });
+                    }
+                }
+            });
+        
+        const sortedMonthLabels = Object.keys(futureInstallments).sort((a, b) => {
+            const parseMonthYear = (label) => {
+                const monthNames = {
+                    'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5,
+                    'jul': 6, 'ago': 7, 'set': 8, 'out': 9, 'nov': 10, 'dez': 11
+                };
+                const parts = label.split(' ');
+                const monthAbbr = parts[0].toLowerCase();
+                const yearShort = parseInt(parts[1]); 
+                const year = 2000 + yearShort; 
+
+                const monthIndex = monthNames[monthAbbr];
+                if (monthIndex === undefined) {
+                    console.error("Unknown month abbreviation:", monthAbbr);
+                    return new Date(year, 0); 
+                }
+                return new Date(year, monthIndex);
+            };
+            return parseMonthYear(a) - parseMonthYear(b);
+        });
+
+        futureInstallmentsChart.data.labels = sortedMonthLabels;
+        futureInstallmentsChart.data.datasets[0].data = sortedMonthLabels.map(label => futureInstallments[label]);
+        futureInstallmentsChart.update();
+
+        // Populate textual list
+        let textListHtml = '';
+        if (sortedMonthLabels.every(month => futureInstallments[month] === 0)) {
+            futureInvoicesTextListEl.innerHTML = '<p>Nenhuma fatura ou parcela futura para este cartão.</p>';
+        } else {
+            sortedMonthLabels.forEach(monthLabel => {
+                if (futureInstallments[monthLabel] > 0) {
+                    textListHtml += `<div class="mb-2 p-2 bg-slate-50 rounded-lg">
+                                        <strong class="text-slate-800">${monthLabel}: ${formatCurrency(futureInstallments[monthLabel])}</strong>
+                                        <ul class="list-disc pl-6 mt-1 space-y-0.5">`;
+                    futureInvoicesDetails[monthLabel].sort((a,b) => b.amount - a.amount).forEach(detail => {
+                        textListHtml += `<li class="text-slate-600">${detail.description}: ${formatCurrency(detail.amount)}</li>`;
+                    });
+                    textListHtml += `</ul></div>`;
+                }
+            });
+            futureInvoicesTextListEl.innerHTML = textListHtml;
+        }
+    };
+
+    const updateEmotionalMessage = () => {
+        const totalIncome = state.incomes.reduce((sum, inc) => sum + inc.amount, 0);
+        if (totalIncome === 0) {
+            emotionalMessageEl.innerHTML = `<p>Comece adicionando suas rendas para planejar seu mês!</p>`;
+            return;
+        }
+
+        const totalExpenses = state.expenses
+            .filter(e => new Date(e.date).getMonth() === state.currentMonth && new Date(e.date).getFullYear() === state.currentYear)
+            .reduce((sum, exp) => sum + exp.amount, 0);
+        
+        const balance = totalIncome - totalExpenses;
+        let messages = [];
+
+        const ccExpenses = state.expenses.filter(e => e.paymentMethod === 'Cartão de Crédito' && new Date(e.date).getMonth() === state.currentMonth).reduce((sum, e) => sum + e.amount, 0);
+        const ccRatio = totalIncome > 0 ? ccExpenses / totalIncome : 0; 
+        if (ccRatio > 0.5) {
+            messages.push(`<strong>Alerta Vermelho!</strong> Sua fatura do cartão consome mais de 50% da sua renda. É hora de repensar o uso para evitar o endividamento.`);
+        } else if (ccRatio > 0.3) {
+            messages.push(`<strong>Cuidado!</strong> O cartão de crédito representa ${Math.round(ccRatio*100)}% da sua renda. Mantenha o controle para não se tornar uma bola de neve.`);
+        }
+
+        const categoryTotals = {};
+        state.expenses
+            .filter(e => new Date(e.date).getMonth() === state.currentMonth)
+            .forEach(expense => {
+            categoryTotals[expense.category] = (categoryTotals[expense.category] || 0) + expense.amount;
+        });
+
+        const highSpendingCategories = Object.entries(categoryTotals)
+            .filter(([cat, total]) => ['Alimentação (Fora/Delivery)', 'Lazer/Festas/Bares', 'Compras (Roupas, etc)', 'Estética/Cuidados Pessoais'].includes(cat) && (total / totalIncome) > 0.15)
+            .sort((a,b) => b[1] - a[1]);
+        
+        if (highSpendingCategories.length > 0) {
+            const [cat, total] = highSpendingCategories[0];
+            messages.push(`Seu maior gasto variável é em <strong>${cat}</strong>. Reduzir um pouco aqui pode liberar um bom valor para seus objetivos.`);
+        }
+
+        if (state.emergencyReserve < totalIncome * 3) { 
+             messages.push(`Sua reserva de emergência atual é de ${formatCurrency(state.emergencyReserve)}. O ideal é ter pelo menos 3 meses da sua renda (${formatCurrency(totalIncome * 3)}). Continue construindo sua segurança!`);
+        } else {
+             messages.push(`<strong>Excelente!</strong> Sua reserva de emergência está robusta. Mantenha a disciplina e explore novas formas de fazer seu dinheiro render.`);
+        }
+
+        if (messages.length > 0) {
+            emotionalMessageEl.innerHTML = messages.map(m => `<p>${m}</p>`).join('');
+        } else {
+            emotionalMessageEl.innerHTML = `<p>Continue lançando seus gastos para receber mais insights e manter o controle!</p>`;
+        }
+    };
+
+
+    const fullUpdate = () => {
+        if (!state.isDataLoaded) return; 
+        updateDashboard();
+        renderRecentExpenses();
+        updateCategoryChart();
+        updateBalanceChart();
+        updateCreditCardDashboard();
+        updateEmotionalMessage();
+        renderIncomesList(); 
+        populateCreditCardSelectors(); 
+    };
+
+    // --- Lógica de Eventos ---
+    paymentMethodEl.addEventListener('change', (e) => {
+        const isCreditCard = e.target.value === 'Cartão de Crédito';
+        installmentsContainer.classList.toggle('hidden', !isCreditCard);
+        expenseCreditCardSelector.required = isCreditCard; 
+    });
+
+    reserveForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        state.emergencyReserve = parseFloat(emergencyReserveInput.value) || 0;
+        try {
+            await window.setDocument('appState', 'userSettings', { emergencyReserve: state.emergencyReserve });
+            toggleReserveModal(); 
+        } catch (error) {
+            console.error("Error saving emergency reserve: ", error);
+        }
+    });
+
+    addCardForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const cardName = document.getElementById('new-card-name').value;
+        const cardLimit = parseFloat(document.getElementById('new-card-limit').value);
+        try {
+            const newCardId = await window.addDocument('creditCards', { name: cardName, limit: cardLimit });
+            document.getElementById('new-card-name').value = '';
+            document.getElementById('new-card-limit').value = '';
+            if (!state.selectedCreditCardId) { 
+                state.selectedCreditCardId = newCardId;
+                await window.setDocument('appState', 'userSettings', { selectedCreditCardId: newCardId });
+            }
+        } catch (error) {
+            console.error("Error adding card: ", error);
+        }
+    });
+
+    dashboardCreditCardSelector.addEventListener('change', async (e) => {
+        state.selectedCreditCardId = e.target.value;
+        try {
+            await window.setDocument('appState', 'userSettings', { selectedCreditCardId: state.selectedCreditCardId });
+        } catch (error) {
+            console.error("Error setting selected card: ", error);
+        }
+        updateDashboard(); 
+        updateCreditCardDashboard(); 
+    });
+
+
+    expenseForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const description = document.getElementById('expense-description').value;
+        const amount = parseFloat(document.getElementById('expense-amount').value);
+        const date = document.getElementById('expense-date').value;
+        const category = document.getElementById('expense-category').value;
+        const paymentMethod = document.getElementById('payment-method').value;
+        const installmentsCount = parseInt(document.getElementById('installments-count').value);
+        const cardId = document.getElementById('expense-credit-card-selector').value;
+
+        const transactionId = Date.now().toString(); 
+
+        if (paymentMethod === 'Cartão de Crédito' && installmentsCount > 1) {
+            const installmentAmount = amount / installmentsCount;
+            for (let i = 0; i < installmentsCount; i++) {
+                const installmentDate = new Date(date);
+                installmentDate.setMonth(installmentDate.getMonth() + i); 
+                try {
+                    await window.addDocument('expenses', {
+                        transactionId: transactionId, 
+                        description: `${description} (${i+1}/${installmentsCount})`,
+                        amount: installmentAmount,
+                        date: installmentDate.toISOString().split('T')[0], 
+                        category,
+                        paymentMethod,
+                        cardId: cardId, 
+                        installments: { current: i + 1, total: installmentsCount }
+                    });
+                } catch (error) {
+                    console.error("Error adding installment: ", error);
+                }
+            }
+        } else {
+            try {
+                await window.addDocument('expenses', {
+                    description, amount, date, category, paymentMethod,
+                    cardId: paymentMethod === 'Cartão de Crédito' ? cardId : null, 
+                });
+            } catch (error) {
+                console.error("Error adding expense: ", error);
+            }
+        }
+        
+        expenseForm.reset();
+        installmentsContainer.classList.add('hidden');
+    });
+
+    incomeForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const description = document.getElementById('income-description').value;
+        const amount = parseFloat(document.getElementById('income-amount').value);
+        try {
+            await window.addDocument('incomes', { description, amount });
+            incomeForm.reset();
+        } catch (error) {
+            console.error("Error adding income: ", error);
+        }
+    });
+    
+    // --- Lógica de Abas e Modais ---
+    const tabExpense = document.getElementById('tab-expense');
+    const tabIncome = document.getElementById('tab-income');
+    
+    tabExpense.addEventListener('click', () => {
+        expenseForm.classList.remove('hidden');
+        tabExpense.classList.add('text-teal-600', 'border-teal-600');
+        tabExpense.classList.remove('text-slate-500');
+        tabIncome.classList.add('text-slate-500');
+        tabIncome.classList.remove('text-teal-600', 'border-teal-600');
+    });
+
+    tabIncome.addEventListener('click', () => {
+        toggleIncomeModal();
+        renderIncomesList(); 
+    });
+
+    const toggleIncomeModal = () => {
+        incomeModal.classList.toggle('hidden');
+        incomeModal.classList.toggle('flex');
+    }
+
+    const toggleReserveModal = () => { 
+        reserveModal.classList.toggle('hidden');
+        reserveModal.classList.toggle('flex');
+        emergencyReserveInput.value = state.emergencyReserve; 
+    }
+
+    const toggleManageCardsModal = () => { 
+        manageCardsModal.classList.toggle('hidden');
+        manageCardsModal.classList.toggle('flex');
+        renderCardList(); 
+    }
+
+    // Novo toggle para o modal de perfil
+    const toggleUserProfileModal = () => {
+        userProfileModal.classList.toggle('hidden');
+        userProfileModal.classList.toggle('flex');
+        userNameInput.value = state.userName; // Preenche o input com o nome atual
+    };
+
+    // Novo evento para o formulário de perfil
+    userProfileForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        state.userName = userNameInput.value.trim();
+        try {
+            await window.setDocument('appState', 'userSettings', { userName: state.userName });
+            toggleUserProfileModal();
+        } catch (error) {
+            console.error("Error saving user name: ", error);
+        }
+    });
+
+    // --- Carregamento de Dados do Firestore ---
+    const loadUserData = () => {
+        let loadedCount = 0;
+        const totalToLoad = 4; 
+
+        const checkAllLoaded = () => {
+            loadedCount++;
+            if (loadedCount === totalToLoad) {
+                state.isDataLoaded = true;
+                loadingOverlay.classList.add('hidden');
+                fullUpdate();
+            }
+        };
+
+        window.setupRealtimeListener('incomes', (data) => {
+            state.incomes = data;
+            if (!state.isDataLoaded) checkAllLoaded();
+            else fullUpdate();
+        });
+
+        window.setupRealtimeListener('expenses', (data) => {
+            state.expenses = data;
+            if (!state.isDataLoaded) checkAllLoaded();
+            else fullUpdate();
+        });
+
+        window.setupRealtimeListener('creditCards', (data) => {
+            state.creditCards = data;
+            if (!state.isDataLoaded) checkAllLoaded();
+            else {
+                if (state.creditCards.length > 0 && (!state.selectedCreditCardId || !state.creditCards.some(card => card.id === state.selectedCreditCardId))) {
+                    state.selectedCreditCardId = state.creditCards[0].id;
+                    window.setDocument('appState', 'userSettings', { selectedCreditCardId: state.selectedCreditCardId });
+                } else if (state.creditCards.length === 0) {
+                    state.selectedCreditCardId = null;
+                    window.setDocument('appState', 'userSettings', { selectedCreditCardId: null });
+                }
+                fullUpdate();
+            }
+        });
+
+        window.setupDocumentListener('appState', 'userSettings', (data) => {
+            if (data) {
+                state.emergencyReserve = data.emergencyReserve || 0;
+                state.userName = data.userName || ''; // Carrega o nome do usuário
+                if (data.selectedCreditCardId && state.creditCards.some(card => card.id === data.selectedCreditCardId)) {
+                    state.selectedCreditCardId = data.selectedCreditCardId;
+                } else if (state.creditCards.length > 0) {
+                    state.selectedCreditCardId = state.creditCards[0].id;
+                } else {
+                    state.selectedCreditCardId = null;
+                }
+            } else {
+                state.emergencyReserve = 0;
+                state.userName = ''; // Garante que o nome seja vazio se não houver dados
+                state.selectedCreditCardId = null;
+            }
+            if (!state.isDataLoaded) checkAllLoaded();
+            else fullUpdate();
+        });
+    };
+
+
+    // --- Inicialização ---
+    const initializeApp = () => {
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        
+        expenseDateEl.value = todayStr;
+        initializeCharts();
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        
+        if (Object.keys(firebaseConfig).length > 0) {
+            window.initializeAppFirebase(firebaseConfig);
+        } else {
+            console.error("Firebase config not found. Data persistence will not work.");
+            loadingOverlay.classList.add('hidden'); 
+            state.isDataLoaded = true; 
+            fullUpdate();
+        }
+    };
+
+    window.onload = initializeApp;
+
+</script>
+
+</body>
+</html>
