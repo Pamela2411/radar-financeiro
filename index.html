@@ -20,22 +20,29 @@
         window.db = null;
         window.auth = null;
         window.userId = null;
+        window.firebaseConfig = {}; // Variável para armazenar a configuração do Firebase
+        let currentAppId = 'default-app-id'; // ID do aplicativo a ser usado no Firestore
 
         // Expose Firebase functions to global scope for use in inline scripts
-        window.initializeAppFirebase = (firebaseConfig) => {
-            window.firebaseApp = initializeApp(firebaseConfig);
+        window.initializeAppFirebase = (config) => {
+            window.firebaseConfig = config; // Armazena a configuração
+            window.firebaseApp = initializeApp(window.firebaseConfig);
             window.db = getFirestore(window.firebaseApp);
             window.auth = getAuth(window.firebaseApp);
+
+            // Define o ID do aplicativo para uso no Firestore, priorizando __app_id do ambiente Canvas
+            currentAppId = typeof __app_id !== 'undefined' ? __app_id : window.firebaseConfig.projectId;
 
             onAuthStateChanged(window.auth, async (user) => {
                 if (user) {
                     window.userId = user.uid;
                     console.log("Authenticated with user ID:", window.userId);
-                    // Now that we have a user, load data
+                    // Agora que temos um usuário, carregamos os dados
                     loadUserData();
                 } else {
                     console.log("No user signed in. Attempting anonymous sign-in...");
                     try {
+                        // Usa __initial_auth_token se disponível (ambiente Canvas), caso contrário, autentica anonimamente
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             await signInWithCustomToken(window.auth, __initial_auth_token);
                         } else {
@@ -51,8 +58,9 @@
         // Firestore operations exposed to global scope
         window.addDocument = async (collectionName, data) => {
             if (!window.userId) { console.error("User not authenticated."); return; }
+            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
             try {
-                const colRef = collection(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`);
+                const colRef = collection(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`);
                 const docRef = await addDoc(colRef, data);
                 return docRef.id;
             } catch (e) {
@@ -62,8 +70,9 @@
 
         window.setDocument = async (collectionName, docId, data) => {
             if (!window.userId) { console.error("User not authenticated."); return; }
+            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
             try {
-                const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                 await setDoc(docRef, data, { merge: true });
             } catch (e) {
                 console.error("Error setting document: ", e);
@@ -72,8 +81,9 @@
 
         window.deleteDocument = async (collectionName, docId) => {
             if (!window.userId) { console.error("User not authenticated."); return; }
+            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
             try {
-                const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                 await deleteDoc(docRef);
             } catch (e) {
                 console.error("Error deleting document: ", e);
@@ -82,20 +92,21 @@
 
         window.setupRealtimeListener = (collectionName, callback) => {
             if (!window.userId) { 
-                // This might be called before userId is available, so we defer setup
                 const unsubscribe = onAuthStateChanged(window.auth, (user) => {
                     if (user) {
-                        const q = query(collection(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`));
+                        if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                        const q = query(collection(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`));
                         onSnapshot(q, (snapshot) => {
                             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                             callback(data);
                         });
-                        unsubscribe(); // Unsubscribe from auth changes once user is found
+                        unsubscribe(); 
                     }
                 });
-                return () => {}; // Return a dummy unsubscribe for now
+                return () => {}; 
             } else {
-                const q = query(collection(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`));
+                if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                const q = query(collection(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`));
                 return onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     callback(data);
@@ -107,7 +118,8 @@
             if (!window.userId) {
                 const unsubscribe = onAuthStateChanged(window.auth, (user) => {
                     if (user) {
-                        const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                        if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                        const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                         onSnapshot(docRef, (docSnap) => {
                             if (docSnap.exists()) {
                                 callback({ id: docSnap.id, ...docSnap.data() });
@@ -120,7 +132,8 @@
                 });
                 return () => {};
             } else {
-                const docRef = doc(window.db, `artifacts/${__app_id}/users/${window.userId}/${collectionName}`, docId);
+                if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                 return onSnapshot(docRef, (docSnap) => {
                     if (docSnap.exists()) {
                         callback({ id: docSnap.id, ...docSnap.data() });
@@ -493,8 +506,8 @@
         creditCards: [], 
         selectedCreditCardId: null, 
         emergencyReserve: 0, 
-        userName: '', // Novo campo para o nome do usuário
-        isDataLoaded: false // Flag para controlar o carregamento inicial dos dados
+        userName: '', 
+        isDataLoaded: false 
     };
 
     // --- Elementos do DOM ---
@@ -524,10 +537,10 @@
     const dashboardCreditCardSelector = document.getElementById('dashboard-credit-card-selector'); 
     const availableLimitEl = document.getElementById('available-limit'); 
     const loadingOverlay = document.getElementById('loading-overlay');
-    const userGreetingEl = document.getElementById('user-greeting'); // Novo elemento
-    const userProfileModal = document.getElementById('user-profile-modal'); // Novo modal
-    const userNameInput = document.getElementById('user-name-input'); // Novo input
-    const userProfileForm = document.getElementById('user-profile-form'); // Novo formulário
+    const userGreetingEl = document.getElementById('user-greeting'); 
+    const userProfileModal = document.getElementById('user-profile-modal'); 
+    const userNameInput = document.getElementById('user-name-input'); 
+    const userProfileForm = document.getElementById('user-profile-form'); 
 
 
     // --- Funções de Formatação ---
@@ -620,7 +633,6 @@
         availableLimitEl.classList.remove('text-blue-600', 'text-red-600');
         availableLimitEl.classList.add(availableLimit >= 0 ? 'text-blue-600' : 'text-red-600');
 
-        // Atualiza a saudação do usuário
         userGreetingEl.textContent = state.userName ? `Olá, ${state.userName}!` : 'Olá!';
     };
     
@@ -1195,7 +1207,7 @@
         window.setupDocumentListener('appState', 'userSettings', (data) => {
             if (data) {
                 state.emergencyReserve = data.emergencyReserve || 0;
-                state.userName = data.userName || ''; // Carrega o nome do usuário
+                state.userName = data.userName || ''; 
                 if (data.selectedCreditCardId && state.creditCards.some(card => card.id === data.selectedCreditCardId)) {
                     state.selectedCreditCardId = data.selectedCreditCardId;
                 } else if (state.creditCards.length > 0) {
@@ -1205,7 +1217,7 @@
                 }
             } else {
                 state.emergencyReserve = 0;
-                state.userName = ''; // Garante que o nome seja vazio se não houver dados
+                state.userName = ''; 
                 state.selectedCreditCardId = null;
             }
             if (!state.isDataLoaded) checkAllLoaded();
@@ -1222,13 +1234,30 @@
         expenseDateEl.value = todayStr;
         initializeCharts();
 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // ##################################################################################
+        // ##################################################################################
+        // #                                                                                #
+        // #             !!! ATENÇÃO: SUAS CONFIGURAÇÕES DO FIREBASE ESTÃO AQUI !!!           #
+        // #                                                                                #
+        // ##################################################################################
+        // ##################################################################################
+        window.firebaseConfig = {
+            apiKey: "AIzaSyAz5wpJH-soQZfo7K393lIt1O7jO8bewZA",
+            authDomain: "radar-financeiro-42e2f.firebaseapp.com",
+            projectId: "radar-financeiro-42e2f",
+            storageBucket: "radar-financeiro-42e2f.firebasestorage.app",
+            messagingSenderId: "610462054688",
+            appId: "1:610462054688:web:a4bc3dbe08c1b853ffbf45"
+            // measurementId: "G-R0HSK82FSH" // measurementId não é necessário para esta aplicação
+        };
         
-        if (Object.keys(firebaseConfig).length > 0) {
-            window.initializeAppFirebase(firebaseConfig);
+        // Verifica se as configurações foram preenchidas corretamente (não são os placeholders)
+        if (window.firebaseConfig.projectId && window.firebaseConfig.apiKey && 
+            window.firebaseConfig.apiKey !== "COLOQUE_SUA_API_KEY_AQUI" &&
+            window.firebaseConfig.projectId !== "COLOQUE_SEU_PROJECT_ID_AQUI") {
+            window.initializeAppFirebase(window.firebaseConfig);
         } else {
-            console.error("Firebase config not found. Data persistence will not work.");
+            console.warn("As configurações do Firebase não foram preenchidas ou estão incorretas. O salvamento de dados não funcionará. Por favor, siga as instruções no código para configurar seu projeto Firebase.");
             loadingOverlay.classList.add('hidden'); 
             state.isDataLoaded = true; 
             fullUpdate();
