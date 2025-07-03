@@ -1264,6 +1264,13 @@
         expenseDateEl.value = todayStr;
         initializeCharts();
 
+        // ##################################################################################
+        // ##################################################################################
+        // #                                                                                #
+        // #             !!! ATENÇÃO: SUAS CONFIGURAÇÕES DO FIREBASE ESTÃO AQUI !!!           #
+        // #                                                                                #
+        // ##################################################################################
+        // ##################################################################################
         window.firebaseConfig = {
             apiKey: "AIzaSyAz5wpJH-soQZfo7K393lIt1O7jO8bewZA",
             authDomain: "radar-financeiro-42e2f.firebaseapp.com",
@@ -1274,17 +1281,8 @@
             measurementId: "G-R0HSK82FSH" // Adicionado o measurementId aqui
         };
         
-        // Verifica se as configurações foram preenchidas corretamente (não são os placeholders)
-        if (window.firebaseConfig.projectId && window.firebaseConfig.apiKey && 
-            window.firebaseConfig.apiKey !== "AIzaSyAz5wpJH-soQZfo7K393lIt1O7jO8bewZA" &&
-            window.firebaseConfig.projectId !== "radar-financeiro-42e2f") {
-            window.initializeAppFirebase(window.firebaseConfig);
-        } else {
-            console.warn("As configurações do Firebase não foram preenchidas ou estão incorretas. O salvamento de dados não funcionará. Por favor, siga as instruções no código para configurar seu projeto Firebase.");
-            loadingOverlay.classList.add('hidden'); 
-            state.isDataLoaded = true; 
-            fullUpdate();
-        }
+        // Apenas inicializa o Firebase, a verificação de placeholders foi removida
+        window.initializeAppFirebase(window.firebaseConfig);
     };
 
     window.onload = initializeApp;
