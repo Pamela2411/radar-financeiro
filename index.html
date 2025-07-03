@@ -11,9 +11,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- Firebase SDK -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, onSnapshot, addDoc, setDoc, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // Atualizado para a versão 11.10.0 das bibliotecas Firebase
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+        import { getFirestore, collection, query, onSnapshot, addDoc, setDoc, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 
         // Global Firebase variables (will be initialized in initializeApp)
         window.firebaseApp = null;
@@ -40,16 +41,32 @@
                     // Agora que temos um usuário, carregamos os dados
                     loadUserData();
                 } else {
-                    console.log("No user signed in. Attempting anonymous sign-in...");
+                    console.log("No user signed in. Attempting authentication...");
+                    // Log para depuração: verificar o valor de __initial_auth_token
+                    console.log("Value of __initial_auth_token:", typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : "undefined/null");
+                    console.log("Type of __initial_auth_token:", typeof __initial_auth_token);
+
                     try {
                         // Usa __initial_auth_token se disponível (ambiente Canvas), caso contrário, autentica anonimamente
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             await signInWithCustomToken(window.auth, __initial_auth_token);
+                            console.log("Signed in with custom token.");
                         } else {
                             await signInAnonymously(window.auth);
+                            console.log("Signed in anonymously.");
                         }
                     } catch (error) {
                         console.error("Firebase authentication error:", error);
+                        // Se o erro for de token personalizado inválido, tenta login anônimo como fallback
+                        if (error.code === 'auth/custom-token-mismatch' || error.code === 'auth/invalid-custom-token') {
+                            console.warn("Custom token failed. Attempting anonymous sign-in as fallback.");
+                            try {
+                                await signInAnonymously(window.auth);
+                                console.log("Signed in anonymously after custom token failure.");
+                            } catch (anonError) {
+                                console.error("Anonymous sign-in fallback also failed:", anonError);
+                            }
+                        }
                     }
                 }
             });
@@ -1270,3 +1287,4 @@
 
 </body>
 </html>
+
