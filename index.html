@@ -77,11 +77,13 @@
 
         // Firestore operations exposed to global scope
         window.addDocument = async (collectionName, data) => {
-            if (!window.userId) { console.error("User not authenticated."); return; }
-            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+            console.log(`addDocument: Tentando adicionar documento à coleção '${collectionName}'. userId: ${window.userId}, appId: ${currentAppId}`);
+            if (!window.userId) { console.error("User not authenticated. Cannot add document."); return; }
+            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid. Cannot add document."); return; }
             try {
                 const colRef = collection(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`);
                 const docRef = await addDoc(colRef, data);
+                console.log(`Documento adicionado com ID: ${docRef.id}`);
                 return docRef.id;
             } catch (e) {
                 console.error("Error adding document: ", e);
@@ -89,22 +91,26 @@
         };
 
         window.setDocument = async (collectionName, docId, data) => {
-            if (!window.userId) { console.error("User not authenticated."); return; }
-            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+            console.log(`setDocument: Tentando definir documento na coleção '${collectionName}' com ID '${docId}'. userId: ${window.userId}, appId: ${currentAppId}`);
+            if (!window.userId) { console.error("User not authenticated. Cannot set document."); return; }
+            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid. Cannot set document."); return; }
             try {
                 const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                 await setDoc(docRef, data, { merge: true });
+                console.log(`Documento definido/atualizado com ID: ${docId}`);
             } catch (e) {
                 console.error("Error setting document: ", e);
             }
         };
 
         window.deleteDocument = async (collectionName, docId) => {
-            if (!window.userId) { console.error("User not authenticated."); return; }
-            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+            console.log(`deleteDocument: Tentando excluir documento na coleção '${collectionName}' com ID '${docId}'. userId: ${window.userId}, appId: ${currentAppId}`);
+            if (!window.userId) { console.error("User not authenticated. Cannot delete document."); return; }
+            if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid. Cannot delete document."); return; }
             try {
                 const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                 await deleteDoc(docRef);
+                console.log(`Documento excluído com ID: ${docId}`);
             } catch (e) {
                 console.error("Error deleting document: ", e);
             }
@@ -112,20 +118,23 @@
 
         window.setupRealtimeListener = (collectionName, callback) => {
             if (!window.userId) { 
+                console.log(`setupRealtimeListener: Aguardando autenticação para coleção '${collectionName}'.`);
                 const unsubscribe = onAuthStateChanged(window.auth, (user) => {
                     if (user) {
                         if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                        console.log(`setupRealtimeListener: Autenticado, configurando listener para coleção '${collectionName}'.`);
                         const q = query(collection(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`));
                         onSnapshot(q, (snapshot) => {
                             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                             callback(data);
                         });
-                        unsubscribe(); 
+                        unsubscribe(); // Unsubscribe from auth changes after first successful authentication
                     }
                 });
                 return () => {}; 
             } else {
                 if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                console.log(`setupRealtimeListener: Usuário já autenticado, configurando listener para coleção '${collectionName}'.`);
                 const q = query(collection(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`));
                 return onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -136,9 +145,11 @@
 
         window.setupDocumentListener = (collectionName, docId, callback) => {
             if (!window.userId) {
+                console.log(`setupDocumentListener: Aguardando autenticação para documento '${docId}' na coleção '${collectionName}'.`);
                 const unsubscribe = onAuthStateChanged(window.auth, (user) => {
                     if (user) {
                         if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                        console.log(`setupDocumentListener: Autenticado, configurando listener para documento '${docId}' na coleção '${collectionName}'.`);
                         const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                         onSnapshot(docRef, (docSnap) => {
                             if (docSnap.exists()) {
@@ -147,12 +158,13 @@
                                 callback(null);
                             }
                         });
-                        unsubscribe();
+                        unsubscribe(); // Unsubscribe from auth changes after first successful authentication
                     }
                 });
                 return () => {};
             } else {
                 if (!currentAppId || currentAppId === 'default-app-id') { console.error("Firebase Project ID (appId) is missing or invalid."); return; }
+                console.log(`setupDocumentListener: Usuário já autenticado, configurando listener para documento '${docId}' na coleção '${collectionName}'.`);
                 const docRef = doc(window.db, `artifacts/${currentAppId}/users/${window.userId}/${collectionName}`, docId);
                 return onSnapshot(docRef, (docSnap) => {
                     if (docSnap.exists()) {
@@ -332,6 +344,7 @@
                 <button onclick="toggleUserProfileModal()" class="text-blue-500 hover:text-blue-700 text-sm font-semibold ml-2">
                     ✏️
                 </button>
+                <p id="user-id-display" class="text-xs text-slate-400 mt-1"></p>
             </div>
         </header>
 
@@ -561,6 +574,7 @@
     const userProfileModal = document.getElementById('user-profile-modal'); 
     const userNameInput = document.getElementById('user-name-input'); 
     const userProfileForm = document.getElementById('user-profile-form'); 
+    const userIdDisplayEl = document.getElementById('user-id-display');
 
 
     // --- Funções de Formatação ---
@@ -654,6 +668,7 @@
         availableLimitEl.classList.add(availableLimit >= 0 ? 'text-blue-600' : 'text-red-600');
 
         userGreetingEl.textContent = state.userName ? `Olá, ${state.userName}!` : 'Olá!';
+        userIdDisplayEl.textContent = window.userId ? `ID do Usuário: ${window.userId}` : 'Não autenticado';
     };
     
     const renderRecentExpenses = () => {
@@ -1054,13 +1069,22 @@
 
     addCardForm.addEventListener('submit', async (e) => {
         e.preventDefault();
+        console.log("addCardForm: Tentando adicionar cartão...");
+        console.log("addCardForm: Current userId:", window.userId);
         const cardName = document.getElementById('new-card-name').value;
         const cardLimit = parseFloat(document.getElementById('new-card-limit').value);
+        
+        if (!window.userId) {
+            console.error("addCardForm: Não é possível adicionar cartão. Usuário não autenticado.");
+            // Poderíamos adicionar uma mensagem visual para o usuário aqui
+            return;
+        }
+
         try {
             const newCardId = await window.addDocument('creditCards', { name: cardName, limit: cardLimit });
             document.getElementById('new-card-name').value = '';
             document.getElementById('new-card-limit').value = '';
-            if (!state.selectedCreditCardId) { 
+            if (newCardId && !state.selectedCreditCardId) { 
                 state.selectedCreditCardId = newCardId;
                 await window.setDocument('appState', 'userSettings', { selectedCreditCardId: newCardId });
             }
