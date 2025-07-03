@@ -34,37 +34,28 @@
             // Define o ID do aplicativo para uso no Firestore, priorizando __app_id do ambiente Canvas
             currentAppId = typeof __app_id !== 'undefined' ? __app_id : window.firebaseConfig.projectId;
 
-            // Lógica de autenticação: tenta custom token primeiro se disponível e válido, senão anônimo
+            // Lógica de autenticação: tenta login anônimo como base, e depois custom token se disponível
             try {
-                const initialAuthTokenExists = typeof __initial_auth_token === 'string' && __initial_auth_token.length > 0;
+                console.log("Tentando login anônimo como base...");
+                await signInAnonymously(window.auth);
+                console.log("Login anônimo realizado com sucesso.");
 
+                const initialAuthTokenExists = typeof __initial_auth_token === 'string' && __initial_auth_token.length > 0;
                 if (initialAuthTokenExists) {
-                    console.log("Tentando login com token personalizado (do ambiente Canvas)...");
+                    console.log("Token personalizado (do ambiente Canvas) detectado. Tentando autenticar com ele...");
                     try {
+                        // Se já autenticado anonimamente, signInWithCustomToken irá atualizar o usuário
                         await signInWithCustomToken(window.auth, __initial_auth_token);
-                        console.log("Login com token personalizado realizado com sucesso.");
+                        console.log("Login com token personalizado realizado com sucesso (usuário atualizado).");
                     } catch (error) {
-                        console.error("Erro na autenticação com token personalizado:", error);
-                        // Se o erro for custom-token-mismatch, tenta login anônimo como fallback
-                        if (error.code === 'auth/custom-token-mismatch' || error.code === 'auth/invalid-custom-token') {
-                            console.warn("Token personalizado inválido. Tentando login anônimo como fallback.");
-                            await signInAnonymously(window.auth);
-                            console.log("Login anônimo realizado após falha do token personalizado.");
-                        } else {
-                            // Outros erros de custom token, ainda tenta anônimo
-                            console.warn("Outro erro de token personalizado. Tentando login anônimo como fallback.");
-                            await signInAnonymously(window.auth);
-                            console.log("Login anônimo realizado após outro erro de token personalizado.");
-                        }
+                        console.error("Erro ao tentar autenticar com token personalizado (mas login anônimo já está ativo):", error);
+                        // O erro custom-token-mismatch aqui é esperado se o token Canvas não for válido.
+                        // O importante é que o usuário já está autenticado anonimamente.
                     }
-                } else {
-                    console.log("Nenhum token personalizado válido encontrado. Tentando login anônimo diretamente.");
-                    await signInAnonymously(window.auth);
-                    console.log("Login anônimo realizado com sucesso.");
                 }
             } catch (error) {
-                // Captura qualquer erro que possa ocorrer durante as tentativas de signInAnonymously
-                console.error("Erro final na tentativa de autenticação:", error);
+                console.error("Erro crítico na autenticação inicial (nem mesmo o login anônimo funcionou):", error);
+                // Se nem o login anônimo funcionar, o app não poderá salvar dados.
             }
 
             // onAuthStateChanged irá reagir ao resultado final da autenticação
@@ -865,6 +856,10 @@
     };
 
     const updateCreditCardDashboard = () => {
+        console.log("--- DEBUG: updateCreditCardDashboard ---");
+        console.log("State expenses:", state.expenses);
+        console.log("Selected Credit Card ID:", state.selectedCreditCardId);
+
         const now = new Date();
         const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
@@ -900,30 +895,36 @@
             futureInvoicesDetails[monthLabel] = [];
         }
 
-        state.expenses
-            .filter(e => e.paymentMethod === 'Cartão de Crédito' && e.cardId === state.selectedCreditCardId)
-            .forEach(e => {
-                const expenseDate = new Date(e.date); 
-                const expenseMonth = expenseDate.getMonth();
-                const expenseYear = expenseDate.getFullYear();
-
-                const diffMonthsFromCurrent = (expenseYear - currentYear) * 12 + (expenseMonth - currentMonth);
-                
-                if(diffMonthsFromCurrent >= 0 && diffMonthsFromCurrent <= 6) { 
-                    const futureDate = new Date(currentYear, currentMonth + diffMonthsFromCurrent, 1);
-                    const monthLabel = futureDate.toLocaleString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''); 
-                    
-                    if(futureInstallments.hasOwnProperty(monthLabel)) {
-                        futureInstallments[monthLabel] += e.amount;
-                        futureInvoicesDetails[monthLabel].push({
-                            description: e.description,
-                            amount: e.amount,
-                            isInstallment: e.installments && e.installments.total > 1
-                        });
-                    }
-                }
-            });
+        const filteredCreditCardExpenses = state.expenses
+            .filter(e => e.paymentMethod === 'Cartão de Crédito' && e.cardId === state.selectedCreditCardId);
         
+        console.log("Filtered Credit Card Expenses:", filteredCreditCardExpenses);
+
+        filteredCreditCardExpenses.forEach(e => {
+            const expenseDate = new Date(e.date); 
+            const expenseMonth = expenseDate.getMonth();
+            const expenseYear = expenseDate.getFullYear();
+
+            const diffMonthsFromCurrent = (expenseYear - currentYear) * 12 + (expenseMonth - currentMonth);
+            
+            if(diffMonthsFromCurrent >= 0 && diffMonthsFromCurrent <= 6) { 
+                const futureDate = new Date(currentYear, currentMonth + diffMonthsFromCurrent, 1);
+                const monthLabel = futureDate.toLocaleString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''); 
+                
+                if(futureInstallments.hasOwnProperty(monthLabel)) {
+                    futureInstallments[monthLabel] += e.amount;
+                    futureInvoicesDetails[monthLabel].push({
+                        description: e.description,
+                        amount: e.amount,
+                        isInstallment: e.installments && e.installments.total > 1
+                    });
+                }
+            }
+        });
+        
+        console.log("Future Installments calculated:", futureInstallments);
+        console.log("Future Invoices Details calculated:", futureInvoicesDetails);
+
         const sortedMonthLabels = Object.keys(futureInstallments).sort((a, b) => {
             const parseMonthYear = (label) => {
                 const monthNames = {
@@ -1282,8 +1283,8 @@
         
         // Verifica se as configurações foram preenchidas corretamente (não são os placeholders)
         if (window.firebaseConfig.projectId && window.firebaseConfig.apiKey && 
-            window.firebaseConfig.apiKey !== "COLOQUE_SUA_API_KEY_AQUI" &&
-            window.firebaseConfig.projectId !== "COLOQUE_SEU_PROJECT_ID_AQUI") {
+            window.firebaseConfig.apiKey !== "AIzaSyAz5wpJH-soQZfo7K393lIt1O7jO8bewZA" &&
+            window.firebaseConfig.projectId !== "radar-financeiro-42e2f") {
             window.initializeAppFirebase(window.firebaseConfig);
         } else {
             console.warn("As configurações do Firebase não foram preenchidas ou estão incorretas. O salvamento de dados não funcionará. Por favor, siga as instruções no código para configurar seu projeto Firebase.");
